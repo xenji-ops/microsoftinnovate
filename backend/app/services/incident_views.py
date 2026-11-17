@@ -109,19 +109,46 @@ def build_incident_detail(incident: IncidentModel) -> IncidentDetailResponse:
             explanation=e.explanation or ""
         ))
         
-    # MITRE Context parsing
+   # MITRE Context parsing
+    from app.services.mitre import get_technique
+
     techniques = []
+
     for m in incident.mitre_mappings:
+        catalogue_entry = get_technique(m.technique_id)
+
+        supporting_alert_ids = sorted({
+            a.alert_id
+            for a in inc_alerts
+            if a.mitre_technique and a.mitre_technique.strip() == m.technique_id
+        })
+
         techniques.append(MITRETechniqueContext(
             technique_id=m.technique_id,
-            name="Unknown", # Name is dropped from mapping table for brevity, normally fetched from catalog
-            tactic=m.tactic,
+            name=catalogue_entry.name,
+            tactic=m.tactic or catalogue_entry.tactic,
             reason=m.reason,
             source=m.source,
             in_catalogue=m.in_catalogue,
-            alert_ids=[]
+            alert_ids=supporting_alert_ids
         ))
-    mitre_ctx = IncidentMITREContext(techniques=techniques, tactics_roll_up=[t.tactic for t in techniques])
+
+    techniques.sort(key=lambda t: t.technique_id)
+
+    tactics = sorted(
+        {t.tactic for t in techniques},
+        key=lambda x: (
+            __import__("app.services.mitre", fromlist=["KILL_CHAIN_ORDER"]).KILL_CHAIN_ORDER.index(x)
+            if x in __import__("app.services.mitre", fromlist=["KILL_CHAIN_ORDER"]).KILL_CHAIN_ORDER
+            else 99
+        )
+    )
+
+    mitre_ctx = IncidentMITREContext(
+        techniques=techniques,
+        technique_count=len(techniques),
+        tactics=tactics
+    )
     
     # Brief parsing
     brief_resp = None
@@ -165,7 +192,7 @@ def build_incident_detail(incident: IncidentModel) -> IncidentDetailResponse:
         risk_explanation=explanation,
         severity_score=incident.risk_severity_score or 0.0,
         asset_criticality_score=incident.risk_criticality_score or 0.0,
-        correlation_strength_score=0.0, # Approximate
+        correlation_strength_score=round(min(incident.correlation_score * 100.0, 100.0), 6),
         evidence_strength_score=incident.risk_alert_count_score or 0.0,
         attack_context_score=incident.risk_mitre_score or 0.0,
         start_time=incident.start_time,

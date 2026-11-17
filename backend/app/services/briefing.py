@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "openai/gpt-oss-120b"
 DEFAULT_TEMPERATURE = 0.1
-DEFAULT_MAX_TOKENS = 1024
+DEFAULT_MAX_TOKENS = 4096
 
 SYSTEM_PROMPT = """You are a senior SOC analyst assistant providing concise, evidence-grounded incident briefings for Tier-1 analysts.
 
@@ -156,6 +156,8 @@ def build_fallback_brief(
     asset_str = ", ".join(assets) if assets else "unspecified asset"
     criticalities = sorted({a.asset_criticality.value for a in incident_alerts})
     crit_str = f" ({', '.join(criticalities)})" if criticalities else ""
+    users = sorted({a.user for a in incident_alerts if a.user})
+    iocs = sorted({a.ioc for a in incident_alerts if a.ioc})
 
     # Summary (1-3 sentences)
     summary = (
@@ -163,24 +165,56 @@ def build_fallback_brief(
         f"with {n_alerts} correlated alert{'s' if n_alerts != 1 else ''}."
     )
 
-    # Why it matters (1-2 sentences)
-    why_it_matters = (
-        f"Risk score {triaged_incident.risk_score:.2f}/100: "
-        f"{triaged_incident.explanation}"
-    )
+   # Why it matters (1-2 sentences)
+    explanation = (triaged_incident.explanation or "").strip()
+
+    if explanation:
+        why_it_matters = (
+            f"Risk score {triaged_incident.risk_score:.2f}/100: "
+            f"{explanation}"
+        )
+    else:
+        reasons = []
+
+        if "critical" in criticalities:
+            reasons.append("the incident involves a critical asset")
+
+        if users:
+            reasons.append(
+                f"the activity involves {', '.join(users)}"
+            )
+
+        if triaged_incident.mitre_context.techniques:
+            reasons.append(
+                f"{len(triaged_incident.mitre_context.techniques)} MITRE "
+                "technique(s) were identified"
+            )
+
+        reason_text = "; ".join(reasons)
+
+        if reason_text:
+            why_it_matters = (
+                f"Risk score {triaged_incident.risk_score:.2f}/100 "
+                f"indicates a {priority_str.lower()}-priority incident. "
+                f"This warrants investigation because {reason_text}."
+            )
+        else:
+            why_it_matters = (
+                f"Risk score {triaged_incident.risk_score:.2f}/100 "
+                f"indicates a {priority_str.lower()}-priority incident "
+                f"involving {n_alerts} correlated alerts. "
+                "Review the available evidence to establish its significance."
+            )
 
     # Key evidence (3-5 factual items drawn strictly from data)
     key_evidence: list[str] = [
         f"Target asset: {asset_str}{crit_str}",
         f"{n_alerts} correlated alert(s) spanning {triaged_incident.start_time.isoformat()} to {triaged_incident.end_time.isoformat()}",
-    ]
-
-    users = sorted({a.user for a in incident_alerts if a.user})
+]
     if users:
         key_evidence.append(f"Involved user account(s): {', '.join(users)}")
 
-    iocs = sorted({a.ioc for a in incident_alerts if a.ioc})
-    if iocs:
+        if iocs:
         key_evidence.append(f"Observed IOC(s): {', '.join(iocs)}")
 
     if triaged_incident.mitre_context.techniques:
@@ -198,7 +232,7 @@ def build_fallback_brief(
 
     # MITRE summary (1 item per relevant technique)
     mitre_summary = [
-        f"{t.technique_id} — {t.name} — {t.tactic}"
+        f"{t.technique_id} â€” {t.name} â€” {t.tactic}"
         for t in triaged_incident.mitre_context.techniques
     ]
 
@@ -327,8 +361,9 @@ def generate_incident_brief(
 
     except Exception as exc:
         logger.warning(
-            "Groq generation failed for incident %s; falling back to deterministic template. Error: %s",
+            "Groq generation failed for incident %s. Error type: %s. Details: %s",
             triaged_incident.incident_id,
             type(exc).__name__,
+            str(exc),
         )
         return build_fallback_brief(triaged_incident, incident_alerts)

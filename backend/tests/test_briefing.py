@@ -319,7 +319,7 @@ def test_groq_successful_response_validated():
             "Critical asset DC-01 targeted",
             "IOC c2.evil.com contacted",
         ],
-        "mitre_summary": ["T1003.001 — OS Credential Dumping — Credential Access"],
+        "mitre_summary": ["T1003.001 â€” OS Credential Dumping â€” Credential Access"],
         "recommended_next_steps": [
             "Review domain controller authentication logs",
             "Verify memory dump artifact on DC-01",
@@ -483,7 +483,7 @@ def test_mitre_mapping_not_recalculated():
 
     brief = generate_incident_brief(ti, alerts)
 
-    assert brief.mitre_summary == ["T1078 — Valid Accounts — Defense Evasion"]
+    assert brief.mitre_summary == ["T1078 â€” Valid Accounts â€” Defense Evasion"]
     assert ti.mitre_context.techniques[0].technique_id == "T1078"
 
 
@@ -527,18 +527,29 @@ def test_existing_tasks_1_to_8_behavior_preserved():
 def test_ai_isolation_cannot_change_system_state():
     ti = _make_triaged_incident(risk_score=95.0, priority=RiskPriority.P1)
     alerts = [_make_alert()]
-    
+
     original_risk = ti.risk_score
     original_priority = ti.priority
-    
+
     brief = generate_incident_brief(ti, alerts, force_fallback=True)
-    
+
     # Brief output should not contain fields that can override system state
     assert not hasattr(brief, "risk_score")
     assert not hasattr(brief, "priority")
-    
+
     # Original incident is unmodified
     assert ti.risk_score == original_risk
     assert ti.priority == original_priority
     assert brief.confidence in ("High", "Medium", "Low")
     assert len(brief.recommended_next_steps) >= 1
+def test_fallback_handles_empty_risk_explanation():
+    ti = _make_triaged_incident(risk_score=92.09)
+    ti.explanation = ""
+
+    alert = _make_alert()
+    brief = build_fallback_brief(ti, [alert])
+
+    assert brief.why_it_matters.strip()
+    assert "92.09/100" in brief.why_it_matters
+    assert "critical asset" in brief.why_it_matters
+    assert brief.why_it_matters.endswith(".")
